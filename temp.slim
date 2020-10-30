@@ -1,0 +1,194 @@
+initialize() {
+	
+	initializeSLiMModelType("nonWF");
+	initializeSLiMOptions(dimensionality="xy");
+	
+	if (exists("slimgui")) {
+	
+	defineConstant("Release", 10); 					// Replaces x wild type ind with drive ind.
+	defineConstant("fit", 0.5);  							//Susceptibility cost 
+	
+	}
+	defineConstant("Insecticide_exposure",10);	// Generations between the insecticide spray
+	defineConstant("IR",T);								// logical for whether Insecticide is released or not
+	defineConstant("Mig",0.1);						 //Migration rate on boundary
+	defineConstant("K", 1000); 						// carrying capacity of each subpopulation
+	defineConstant("N",3); //no of sub pops
+	defineConstant("drive_pos", 50000); //position of drive
+	defineConstant("L", c(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0));
+	
+	
+	initializeMutationType("m1",1.0,"f",0.0); //neutral mutation
+	m1.convertToSubstitution= T;
+	m1.color = "#FFFFFF";
+	initializeMutationType("m2", 1.0, "f", 0.0); // Susceptibility gene drive 
+	m2.color = "red";
+	m2.convertToSubstitution = F;
+	
+	initializeGenomicElementType("g1", m1, 1.0);	//Initialises genomic element
+	initializeGenomicElement(g1, 0, 99999);
+	initializeMutationRate(0);
+	initializeRecombinationRate(0);
+	initializeSex("A");
+
+}
+
+
+
+
+reproduction(NULL, "F") {						// Reproduction callback and litter size control
+
+	mate = subpop.sampleIndividuals(1, sex="M", minAge = 2);
+	litterSize = rnorm(1, 3, 1);
+	for (j in length(litterSize))
+		if (size(mate) > 0 & individual.age > 2)
+			subpop.addCrossed(individual, subpop.sampleIndividuals(1, sex="M"));
+}
+
+
+1 early() {
+	for(i in 1:N)								// Adds N sub pops each having 100 ind.
+		sim.addSubpop(i, 1000);
+}
+
+1 late(){
+	
+	for ( subpop in sim.subpopulations) // Assigns a random position to each ind. within xy dimention (2D space)
+	{
+		
+		subpop.individuals.x = runif(subpop.individualCount);
+		subpop.individuals.y = runif(subpop.individualCount);
+	}
+
+}
+
+20:10000 fitness(m2, p2){ if(sim.generation % Insecticide_exposure ==0 & IR ==T ) 
+			return fit; 
+			
+			else 
+			
+			return 1.0;}
+
+
+early(){
+	
+	for (subpop in sim.subpopulations)		//// Mortality and fitness scaling due to age 
+	{
+		inds = sim.subpopulations.individuals;
+		ages = inds.age;
+		mortality = L[ages];
+		survival = (1 - mortality);
+		inds.fitnessScaling = survival;
+		
+		subpop.fitnessScaling = K / (subpop.individualCount * mean(survival));
+	}
+}
+
+early() {			//Migration within and between subpop
+	
+		
+	for (subpop in sim.subpopulations) //within subpop
+	
+	{
+		subpop.individuals.x = subpop.individuals.x + rnorm(1,0,0.001);
+		subpop.individuals.y = subpop.individuals.y + rnorm(1,0,0.001);
+	}
+	
+// p1 to p2 migration
+
+	p1_=p1.individuals;
+	p1x= p1.individuals.x;
+	migrant1= p1_[p1x > 0.9999];
+	
+	for (migrant in migrant1)
+	{
+		p2.takeMigrants(migrant);
+	}
+	p2_=p2.individuals;
+	p2m=p2.individuals.migrant;
+	p2mig=p2_[p2m==T];
+	p2mig.x=0.0;
+	
+//p2 to p3 migration
+	
+	p2x= p2.individuals.x;
+	migrant2= p2_[p2x > 0.9999];
+	
+	for (migrant in migrant2)
+	{
+		p3.takeMigrants(migrant);
+	}
+	p3_=p3.individuals;
+	p3m=p3.individuals.migrant;
+	p3mig=p3_[p3m==T];
+	p3mig.x=0.0;
+
+}
+
+modifyChild(){ // defining child position after birth
+	
+	pos = parent1.spatialPosition + rnorm(2, 0, 0.1);
+	child.setSpatialPosition(subpop.pointStopped(pos));
+	return T;
+
+}
+
+
+
+
+20 early() { 										//Replacement of wild type with drive ind
+	target= p1.sampleIndividuals(Release);
+	target.genome2.addNewMutation(m2, 0.0, drive_pos);
+	target.x=0.0;
+
+}
+
+20:10000 modifyChild() { 					//MCR cycle to replicate CRISPR-Cas9 activity
+	
+	mut = sim.mutationsOfType(m2);
+	if (size(mut) == 1)
+	{
+		hasMutOnChromosome1 = childGenome1.containsMutations(mut);
+		hasMutOnChromosome2 = childGenome2.containsMutations(mut);
+		if (hasMutOnChromosome1 & !hasMutOnChromosome2)
+			childGenome2.addMutations(mut);
+		else if (hasMutOnChromosome2 & !hasMutOnChromosome1)
+			childGenome1.addMutations(mut);
+	}
+	return T;
+
+
+}
+
+
+
+20:10000 late() {							//Prints output of the program including size of each subpop and frequency of drive allele
+	drive = sim.mutationsOfType(m2);
+	
+	//each subpop size
+	p1_inds = size(p1.individuals);
+	p2_inds = size(p2.individuals);
+	p3_inds = size(p3.individuals);
+
+	//prop drive in each suchpop
+	prop_drive_p1 = sim.mutationFrequencies(p1, drive);
+	prop_drive_p2 = sim.mutationFrequencies(p2, drive);
+	prop_drive_p3 = sim.mutationFrequencies(p3, drive);
+	
+
+	if (any(p3.individuals.containsMutations(drive))==T){
+		cat(sim.generation);
+		sim.simulationFinished();
+	}
+
+	if (sim.generation==10000)
+	{
+		cat(20);
+		sim.simulationFinished();
+	}
+	
+	
+	
+}
+
+
